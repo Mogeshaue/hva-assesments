@@ -43,37 +43,42 @@ let displayTest=document.getElementById("displayTest")
 let textColorBtn=document.getElementById("textColorBtn")
 let bgColorBtn=document.getElementById("bgColorBtn")
 let bigTextBtn=document.getElementById("bigTextBtn")
-
-
-textColorBtn.addEventListener('click',addTextcolor)
-bgColorBtn.addEventListener('click',addBackgroundcolor)
-bigTextBtn.addEventListener('click',increaseTextSize)
-
-
+console.log(displayTest)
 textInput.addEventListener("input",function(){
   let inputValue=textInput.value
+  console.log(inputValue)
   displayTest.innerText=inputValue
 })
-
-function addTextcolor(){
-  if(displayTest.style.color=="black"){
+console.log(textColorBtn)
+textColorBtn.addEventListener('click',function addTextcolor(){
+  if(displayTest.style.color=="black" || displayTest.style.color==""){
     displayTest.style.color="blue";
-    
   } else if(displayTest.style.color=="blue"){
     displayTest.style.color="black";
   }
-}
-function addBackgroundcolor(){
+})
+
+bgColorBtn.addEventListener('click',function addBackgroundcolor(){
   if(displayTest.style.backgroundColor=="white" || displayTest.style.backgroundColor==""){
-    displayTest.style.color="yellow";
+    displayTest.style.backgroundColor="yellow";
+    console.log(displayTest)
+    console.log(displayTest.style.backgroundColor)
   } else if(displayTest.style.backgroundColor=="yellow"){
-    displayTest.style.color="";
+    displayTest.style.backgroundColor="white";
   }
-}
-function increaseTextSize(){
-  if(displayTest.style.fontSize=="16px"){
+})
+
+bigTextBtn.addEventListener('click',function increaseTextSize(){
+  console.log(displayTest.style.fontSize) 
+  if(displayTest.style.fontSize=="16px" || displayTest.style.fontSize==""){
     displayTest.style.fontSize="24px";
   } else if(displayTest.style.fontSize=="24px"){
     displayTest.style.fontSize="16px";
   }
 }
+)
+
+
+
+
+
