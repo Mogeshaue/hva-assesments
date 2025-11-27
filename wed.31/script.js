@@ -1,0 +1,79 @@
+
+
+
+// function changeMoodText(text){
+//   let moodMessage=document.getElementById("moodMessage")
+//   moodMessage.innerText=text
+// }
+// function addStyle(btnId){
+//   let currbtn=document.getElementById(btnId)
+//   let buttons=document.getElementsByTagName('button')
+//   for(let i=0;i<buttons.length;i++){
+//     buttons[i].style.backgroundColor="white";
+//     buttons[i].style.color="black";
+//   }
+//   currbtn.style.backgroundColor="black";
+//   currbtn.style.color="white";
+// }
+
+// let happyBtn=document.getElementById("happyBtn").addEventListener("click",function(){
+//   changeMoodText("Great! Keep smiling today!")
+//   addStyle("happyBtn")
+// })
+// let sadBtn=document.getElementById("sadBtn").addEventListener("click",function(){
+//   changeMoodText("It's okay to feel down. Take a deep breath.")
+//   addStyle("sadBtn")
+// })
+// let angryBtn=document.getElementById("angryBtn").addEventListener("click",function(){
+//   changeMoodText("Try stepping away for a moment.")
+//   addStyle("angryBtn")
+// })
+// let tiredBtn=document.getElementById("tiredBtn").addEventListener("click",function(){
+//   changeMoodText("Make sure to rest and recharge.")
+//   addStyle("tiredBtn")
+// })
+// let excitedBtn=document.getElementById("excitedBtn").addEventListener("click",function(){
+//   changeMoodText("Love the energy! Keep it going!")
+//   addStyle("excitedBtn")
+// })
+
+
+let textInput=document.getElementById("textInput")
+let displayTest=document.getElementById("displayTest")
+let textColorBtn=document.getElementById("textColorBtn")
+let bgColorBtn=document.getElementById("bgColorBtn")
+let bigTextBtn=document.getElementById("bigTextBtn")
+
+
+textColorBtn.addEventListener('click',addTextcolor)
+bgColorBtn.addEventListener('click',addBackgroundcolor)
+bigTextBtn.addEventListener('click',increaseTextSize)
+
+
+textInput.addEventListener("input",function(){
+  let inputValue=textInput.value
+  displayTest.innerText=inputValue
+})
+
+function addTextcolor(){
+  if(displayTest.style.color=="black"){
+    displayTest.style.color="blue";
+    
+  } else if(displayTest.style.color=="blue"){
+    displayTest.style.color="black";
+  }
+}
+function addBackgroundcolor(){
+  if(displayTest.style.backgroundColor=="white" || displayTest.style.backgroundColor==""){
+    displayTest.style.color="yellow";
+  } else if(displayTest.style.backgroundColor=="yellow"){
+    displayTest.style.color="";
+  }
+}
+function increaseTextSize(){
+  if(displayTest.style.fontSize=="16px"){
+    displayTest.style.fontSize="24px";
+  } else if(displayTest.style.fontSize=="24px"){
+    displayTest.style.fontSize="16px";
+  }
+}
