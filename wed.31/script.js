@@ -38,47 +38,76 @@
 // })
 
 
-let textInput=document.getElementById("textInput")
-let displayTest=document.getElementById("displayTest")
-let textColorBtn=document.getElementById("textColorBtn")
-let bgColorBtn=document.getElementById("bgColorBtn")
-let bigTextBtn=document.getElementById("bigTextBtn")
-console.log(displayTest)
-textInput.addEventListener("input",function(){
-  let inputValue=textInput.value
-  console.log(inputValue)
-  displayTest.innerText=inputValue
-})
-console.log(textColorBtn)
-textColorBtn.addEventListener('click',function addTextcolor(){
-  if(displayTest.style.color=="black" || displayTest.style.color==""){
-    displayTest.style.color="blue";
-  } else if(displayTest.style.color=="blue"){
-    displayTest.style.color="black";
+// let textInput=document.getElementById("textInput")
+// let displayTest=document.getElementById("displayTest")
+// let textColorBtn=document.getElementById("textColorBtn")
+// let bgColorBtn=document.getElementById("bgColorBtn")
+// let bigTextBtn=document.getElementById("bigTextBtn")
+// console.log(displayTest)
+// textInput.addEventListener("input",function(){
+//   let inputValue=textInput.value
+//   console.log(inputValue)
+//   displayTest.innerText=inputValue
+// })
+// console.log(textColorBtn)
+// textColorBtn.addEventListener('click',function addTextcolor(){
+//   if(displayTest.style.color=="black" || displayTest.style.color==""){
+//     displayTest.style.color="blue";
+//   } else if(displayTest.style.color=="blue"){
+//     displayTest.style.color="black";
+//   }
+// })
+
+// bgColorBtn.addEventListener('click',function addBackgroundcolor(){
+//   if(displayTest.style.backgroundColor=="white" || displayTest.style.backgroundColor==""){
+//     displayTest.style.backgroundColor="yellow";
+//     console.log(displayTest)
+//     console.log(displayTest.style.backgroundColor)
+//   } else if(displayTest.style.backgroundColor=="yellow"){
+//     displayTest.style.backgroundColor="white";
+//   }
+// })
+
+// bigTextBtn.addEventListener('click',function increaseTextSize(){
+//   console.log(displayTest.style.fontSize) 
+//   if(displayTest.style.fontSize=="16px" || displayTest.style.fontSize==""){
+//     displayTest.style.fontSize="24px";
+//   } else if(displayTest.style.fontSize=="24px"){
+//     displayTest.style.fontSize="16px";
+//   }
+// }
+// )
+
+
+let itemInput=document.getElementById("itemInput")
+let addBtn=document.getElementById("addBtn")
+let errorMsg=document.getElementById("errorMsg")
+let itemCount=document.getElementById("itemCount")
+let itemList=document.getElementById("itemList")
+let itemsCnt=0
+addBtn.addEventListener('click',()=>{
+  let item=itemInput.value
+  if(item==""){
+    errorMsg.innerText="Please enter an item"
+  }
+  if(item!=""){
+    errorMsg.innerText=""
+    let blockElement=document.createElement('p')
+    console.log(item)
+    blockElement.innerText=item
+    console.log(blockElement)
+    let delButton=document.createElement('button')
+    delButton.innerText="Delete"
+    blockElement.appendChild(delButton)
+    itemList.appendChild(blockElement)
+    itemsCnt++
+    delButton.addEventListener('click',()=>{
+      itemsCnt--;
+      blockElement.remove()
+      itemCount.innerHTML=`Total Items: ${itemsCnt}`
+    })
+    itemCount.innerHTML=`Total Items: ${itemsCnt}`
+
+    itemInput.value=""  
   }
 })
-
-bgColorBtn.addEventListener('click',function addBackgroundcolor(){
-  if(displayTest.style.backgroundColor=="white" || displayTest.style.backgroundColor==""){
-    displayTest.style.backgroundColor="yellow";
-    console.log(displayTest)
-    console.log(displayTest.style.backgroundColor)
-  } else if(displayTest.style.backgroundColor=="yellow"){
-    displayTest.style.backgroundColor="white";
-  }
-})
-
-bigTextBtn.addEventListener('click',function increaseTextSize(){
-  console.log(displayTest.style.fontSize) 
-  if(displayTest.style.fontSize=="16px" || displayTest.style.fontSize==""){
-    displayTest.style.fontSize="24px";
-  } else if(displayTest.style.fontSize=="24px"){
-    displayTest.style.fontSize="16px";
-  }
-}
-)
-
-
-
-
-
