@@ -81,7 +81,7 @@ filterSelect.addEventListener("change",function(){
 })
 let sortPriorityBtn = document.getElementById("sortPriority");
 sortPriorityBtn.addEventListener("click", function () {
-    let sortOrder = sortPriorityBtn.getAttribute("value"); // 1 = asc, 0 = desc
+    let sortOrder = sortPriorityBtn.getAttribute("value"); 
     let tasks = Array.from(taskList.getElementsByTagName("p"));
     tasks.sort(function (a, b) {
         let p1 = Number(a.getElementsByTagName("button")[0].getAttribute("taskPriority"));
