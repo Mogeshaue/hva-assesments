@@ -457,8 +457,10 @@ From the IDLE state, the operator can issue a command through the serial console
 The critical aspect of the flooding attack implementation is maintaining continuous transmission without gaps. As soon as the TWAI controller completes transmission of one frame and signals this completion through an interrupt or status flag, the firmware immediately constructs and queues the next frame. This tight loop ensures that the bus is continuously occupied by our high-priority messages, giving legitimate nodes no opportunity to win arbitration and transmit their own messages.
 However, there is one practical consideration we must handle: the finite size of the TWAI controller's transmit buffer. The ESP32's TWAI peripheral can queue a small number of frames for transmission, but if our software attempts to queue frames faster than the hardware can transmit them, the buffer will overflow. Our implementation handles this by checking the buffer status before attempting to queue each frame. If the buffer is full, indicated by a TxBufferFull error, the code enters a brief busy-wait loop, repeatedly checking the status until space becomes available. In practice, at five hundred kilobits per second, the hardware can transmit frames fast enough that this busy-wait rarely occurs, but including this check prevents the firmware from losing track of frames or entering an error state.
 The firmware also implements a FLOOD_STOP state that can be entered by operator command. In this state, the continuous transmission of attack frames ceases, but the system does not immediately return to IDLE. Instead, it remains in FLOOD_STOP to allow observation of how the network recovers after the attack ends. This is valuable for understanding the resilience characteristics of the system and for debugging the IDS behavior. From FLOOD_STOP, another command can transition back to IDLE, completing the state cycle.
-Attacker State Machine Diagram
 
+**Attacker State Machine Diagram**
+
+```
                     +----------+
          Power On   |          |
             ------->|   IDLE   |
@@ -490,9 +492,13 @@ Attacker State Machine Diagram
                     +----------+
                     |   IDLE   |
                     +----------+
+```
+
 The implementation in Rust leverages the type system and pattern matching to make the state machine both safe and maintainable. We define an enumeration type representing the possible states, and use pattern matching to handle the transitions and behaviors associated with each state. The Rust compiler ensures that we handle all possible states and that state transitions are explicit and type-safe. This eliminates entire categories of bugs that might occur in a C implementation using integer state variables and if-else chains.
 The serial console interface deserves special mention, as it provides the human-machine interface for controlling the attacker. We implement a simple command-line interface that accepts text commands over the USB serial connection. The operator can type commands to view the current state, trigger state transitions, or query statistics about how many frames have been transmitted. This interface is implemented as a separate asynchronous task that runs concurrently with the attack logic, demonstrating Embassy's ability to manage multiple concurrent operations. The serial task waits for incoming characters, accumulates them into a buffer until a newline is received, parses the resulting command string, and then triggers the appropriate state transition or action.
-6.3 Defense Module Implementation: IDS Architecture
+
+### 6.3 Defense Module Implementation: IDS Architecture
+
 The Intrusion Detection System represents the core contribution of this project. While the attacker firmware demonstrates a known vulnerability, the IDS firmware shows that effective defense is possible even on resource-constrained embedded systems. The IDS implementation combines multiple detection techniques into a cohesive system that can identify and respond to flooding attacks in real-time.
 The overall architecture of the IDS is designed as a modular pipeline that processes each incoming CAN frame through a series of inspection stages. This pipeline architecture makes the system extensible—new detection algorithms can be added as additional pipeline stages—and maintainable, as each stage has a well-defined interface and responsibility. The pipeline is implemented within the receive path of the firmware, so every frame that arrives from the CAN bus passes through the IDS before being delivered to the application layer for processing.
 The first stage of the pipeline is signature-based detection using a blocklist. The IDS maintains a small array of message identifiers that have been flagged as suspicious or malicious. When a frame enters the IDS pipeline, the first check is a simple lookup: is this frame's identifier present in the blocklist? If so, the frame is immediately rejected, and no further processing occurs. This provides fast, deterministic protection against known malicious identifiers.
@@ -500,8 +506,10 @@ The blocklist itself is implemented as a fixed-size array stored in the microcon
 The second major component of the IDS is the anomaly-based frequency analysis engine. This component monitors the rate at which messages appear on the bus, specifically looking for the abnormally high transmission rates characteristic of a flooding attack. The challenge is to detect flooding quickly, with low latency, while avoiding false positives from legitimate bursts of traffic that might occur during normal vehicle operation.
 Our frequency analysis uses a sliding window algorithm with time-based bucketing. We maintain a small buffer that records the timestamps of recently received frames, organized by message identifier. When a new frame arrives, we examine the timestamps of previous frames with the same identifier. If we find that more than a threshold number of frames with this identifier have been received within a defined time window, we conclude that a flooding attack is in progress, and the identifier is added to the blocklist.
 The specific parameters of the sliding window require careful tuning. The window size represents the time period over which we count messages. Too short a window might trigger false positives from brief legitimate bursts. Too long a window increases detection latency, allowing the attack to continue longer before being identified. Through experimentation with our testbed, we found that a window of one hundred milliseconds provides a good balance. The threshold count similarly requires tuning. We set the threshold at fifty messages per window, reasoning that no legitimate message in a typical vehicle network should appear at rates exceeding five hundred hertz. A flooding attack, which aims for maximum bus utilization, will easily exceed this threshold within the first window period.
-IDS Processing Pipeline
 
+**IDS Processing Pipeline**
+
+```
 Incoming CAN Frame
       |
       v
@@ -537,10 +545,12 @@ Incoming CAN Frame
 |  - Process frame data    |
 |  - Update vehicle state  |
 +--------------------------+
+```
+
 The implementation of the sliding window in Rust makes use of the language's powerful iterator and collection abstractions. We store timestamps in a circular buffer, and when checking for flooding, we use iterator methods to filter timestamps within the window and count them. The Rust standard library provides these operations with excellent performance, and the compiler's optimizations ensure that the generated code is as efficient as hand-written C would be.
 A crucial aspect of the IDS implementation is its real-time performance characteristics. The CAN bus operating at five hundred kilobits per second can deliver approximately three thousand eight hundred frames per second in the case of minimum-length frames, though typical traffic is much lower. Our IDS must process each frame with latency low enough that the receive buffer does not overflow. We achieve this through careful algorithm design and by leveraging the hardware acceleration provided by the TWAI controller's acceptance filters.
 The TWAI controller includes hardware filtering capability that can reject frames based on their identifiers before they are even placed in the receive buffer. We configure these hardware filters to immediately reject any identifiers in our blocklist, providing the fastest possible rejection with zero software overhead. When an identifier is added to the software blocklist by the frequency analysis engine, we also update the hardware filters to maintain consistency. This two-level filtering approach—hardware filters for speed, software analysis for intelligence—provides both performance and flexibility.
-6.4 Traffic Monitoring and Statistical Analysis
+## 6.4 Traffic Monitoring and Statistical Analysis
 Beyond the core intrusion detection algorithms, the IDS firmware implements comprehensive traffic monitoring and statistical analysis capabilities. These features serve multiple purposes: they provide visibility into network behavior for debugging and research, they generate the metrics needed to tune detection thresholds, and they enable automated reporting that could alert human operators to security events in a production deployment.
 The statistics module tracks several key metrics for each active message identifier observed on the bus. For each ID, we record the total number of frames received, the timestamp of the first and most recent frame, the minimum and maximum inter-arrival times between consecutive frames, and the current estimated transmission frequency. These statistics are updated in real-time as frames are processed, with minimal computational overhead.
 The frequency estimation deserves particular attention because it feeds directly into the anomaly detection logic. A naive approach would simply count the number of frames received in some fixed time period and divide by the period duration. However, this approach has poor responsiveness to changing conditions—the estimate only updates when each time period expires. We instead use an exponentially weighted moving average, or EWMA, which provides continuous updates and emphasizes recent observations while smoothly incorporating historical data.
@@ -562,7 +572,10 @@ With confidence in the attacker firmware, we proceed to test the IDS firmware. W
 The critical integration test combines all three nodes: sender, receiver with IDS, and attacker. We establish normal traffic patterns with the sender transmitting periodic messages. We verify that the IDS receiver successfully receives these messages and that statistics indicate normal operation. We then activate the attacker and observe the IDS response. Successful operation is indicated by the IDS detecting the flood within the expected latency window, adding the malicious identifier to the blocklist, and continuing to operate normally despite the ongoing attack. We verify that the sender node, protected by the IDS's actions, can still communicate, or at least degrades gracefully rather than entering bus-off state.
 Throughout integration testing, we pay particular attention to edge cases and failure modes. What happens if two nodes attempt to flood simultaneously? How does the IDS behave if it itself is flooded with legitimate traffic from many identifiers, exhausting its statistical tracking resources? Can an attacker craft attack patterns that exploit weaknesses in the detection algorithm? These adversarial test cases help us identify and address vulnerabilities in our defense mechanisms.
 We also conduct performance testing to quantify the computational overhead of the IDS. Using the ESP32's built-in timing facilities, we measure the CPU time consumed by IDS processing for each frame. We vary the traffic load from light (a few messages per second) to heavy (approaching maximum bus capacity) and measure how the processing time scales. We monitor memory usage to ensure we are not approaching the limits of the available RAM. These performance measurements give us confidence that the IDS can operate reliably in the demanding real-time environment of an automotive network, and they identify any bottlenecks that might need optimization.
-Integration Test Sequence
+
+**Integration Test Sequence**
+
+```
 
 Phase 1: Physical Layer Validation
   ├─ Two-node ping-pong test
@@ -596,6 +609,8 @@ Phase 5: Edge Case Testing
   ├─ Rapid attack on/off cycling
   └─ Combined attack + legitimate traffic
        └─ Results documented for algorithm tuning
+```
+
 The integration testing phase typically reveals issues that were not apparent in unit testing. For example, we discovered during testing that our initial frequency threshold was too sensitive, triggering false positives when the sender node transmitted bursts of messages in response to simulated events. We adjusted the threshold based on empirical data from these tests. We also found that the initial implementation of the blocklist had a race condition when the frequency analyzer and the hardware filter update logic accessed the list concurrently. Rust's borrow checker actually prevented us from compiling this buggy code, demonstrating the value of the language's safety guarantees.
 By the time we complete integration testing, we have high confidence that the system operates correctly and robustly. We have characterized its performance, we understand its limitations, and we have validated its core functionality: the ability to detect and mitigate CAN bus flooding attacks in real-time. With this foundation established, we are ready to proceed to formal experimental evaluation and performance measurement, which we will detail in the following chapters. The systematic approach to integration testing, combined with Rust's compile-time safety guarantees, gives us assurance that the results we obtain in formal testing will be reliable and reproducible
 
@@ -610,8 +625,10 @@ The choice of two hertz transmission rate for the legitimate traffic is intentio
 The second node serves as the Receiver and is where our intrusion detection system is deployed. This node runs the IDS firmware we developed and described in detail in the previous chapter. It is configured to receive all messages on the bus, passing each through the IDS inspection pipeline before delivering legitimate traffic to the application layer. The receiver node is also connected to a computer via USB serial interface, allowing us to observe real-time logs, query statistics, and interact with the IDS through its command-line interface. This connection to the computer is essential for data collection during experiments, as we can capture timestamped logs of all IDS events, including frame reception, attack detection, blocklist updates, and mitigation actions.
 The third node is the Attacker, running the evil_doggie firmware. This node begins each experiment in the IDLE state, observing but not participating in network traffic. When we are ready to begin the attack phase of an experiment, we issue a command through its serial interface to transition to the FLOOD state, initiating the denial-of-service attack. The attacker is also connected to a computer for command and control, though in a real attack scenario this connection would be replaced by whatever mechanism the adversary used to compromise the Electronic Control Unit.
 The physical topology of these three nodes deserves consideration. While CAN is a bus topology where all nodes are electrically equivalent once properly connected, the physical arrangement on our breadboard does create a linear ordering. We position the nodes in the order Sender, Receiver, Attacker, with the Sender and Attacker at the physical ends of the bus where we place the termination resistors. This arrangement means the Receiver is in the middle, which is actually slightly advantageous for signal integrity since it is equidistant from both terminators. In a real vehicle, nodes would be distributed throughout the chassis with a more complex physical topology, but our linear arrangement is adequate for experimental purposes and simplifies the physical construction.
-Experimental Testbed Node Configuration
 
+**Experimental Testbed Node Configuration**
+
+```
 +-----------------------------------------------------------------+
 |                         CAN Bus Network                         |
 |                         (500 kbps)                              |
@@ -645,6 +662,8 @@ Experimental Testbed Node Configuration
     | Monitor  |        | Data     |         | Attack   |
     |          |        |Collection|         | Control  |
     +----------+        +----------+         +----------+
+```
+
 The computers connected to each node serve different purposes in the experimental setup. The computer connected to the Sender node is used primarily for monitoring and verification, allowing us to confirm that the Sender is operating as expected and transmitting its periodic messages. The computer connected to the Receiver is the primary data collection point, running logging software that captures all output from the IDS, timestamping each event with microsecond precision. This data forms the basis of our performance analysis and validation. The computer connected to the Attacker serves as the command and control interface, allowing the experimenter to precisely control when attacks begin and end.
 7.2 Baseline Characterization Experiments
 Before we can meaningfully evaluate the effectiveness of our intrusion detection system, we must first establish baseline measurements that characterize the normal operation of the network and quantify any overhead introduced by the IDS itself. These baseline experiments are conducted in three configurations: the network with no IDS, the network with the IDS present but in a passive monitoring mode, and the network with the IDS in active protection mode. Comparing these configurations allows us to isolate the performance impact of the IDS from other factors.
@@ -662,8 +681,10 @@ We can verify this bus saturation by examining the traffic at a bit level. Using
 The impact on the Sender node is also revealing. By monitoring the Sender's serial output, which includes diagnostics from its CAN controller, we observe that the Sender enters the Error Passive state during the attack. This state transition occurs because the Sender repeatedly attempts to transmit its periodic messages but loses arbitration every time to the Attacker's higher-priority frames. From the Sender's perspective, these repeated arbitration losses increment its transmit error counter. When this counter exceeds one hundred twenty-seven, the CAN controller automatically transitions to Error Passive state, which forces the node to wait longer before retransmitting after errors.
 This Error Passive transition demonstrates a particularly insidious aspect of the flooding attack: the legitimate nodes are penalized by the protocol's fault confinement mechanism, while the attacking node continues operating normally. If the attack were to continue long enough, the Sender might eventually enter Bus-Off state and disconnect itself entirely from the network. The attack thus not only prevents immediate communication but can potentially cause lasting disruption that persists even after the attack ends, until the legitimate nodes recover from their error states.
 When the attack stops at the sixty-second mark, we observe interesting recovery behavior. The Sender, now in Error Passive state, must wait through mandatory waiting periods before it can attempt to transmit again. The first legitimate message appears at the Receiver approximately two hundred milliseconds after the attack ends. Subsequent messages arrive at the normal two hertz rate, indicating that the Sender has successfully returned to normal operation. The total recovery time from attack end to full restoration of normal traffic flow is less than one second, which is surprisingly quick given the Error Passive state transition that occurred.
-Attack Effectiveness Timeline (No IDS)
 
+**Attack Effectiveness Timeline (No IDS)**
+
+```
 Time (seconds)
 0         30        30.008      90        90.2      120
 |---------|---------|-----------|---------|---------|
@@ -688,11 +709,49 @@ Bus Utilization:
 Sender Node State:
 Error Active  ->  Error Passive  ->  Error Passive  ->  Error Active
                   (TEC > 127)                          (Recovery)
+```
+
 We repeat these attack experiments multiple times to verify consistency and to gather statistical data. Across ten repetitions, the results are remarkably consistent: attack traffic always achieves greater than ninety-nine percent bus utilization, legitimate traffic is always completely blocked within ten milliseconds of attack start, and recovery after attack end always occurs within three hundred milliseconds. This consistency confirms that the flooding attack is deterministic and highly effective against unprotected networks.
 7.4 Defense Effectiveness Experiments With IDS Active
 The critical experiments are those that evaluate the performance of our intrusion detection system in protecting against the flooding attack. For these experiments, the Receiver runs the full IDS firmware in active protection mode. The experimental protocol is similar to the attack effectiveness experiments: we begin with thirty seconds of normal operation, then trigger a sixty-second attack, then observe recovery for thirty seconds. However, now the IDS is actively monitoring traffic and should detect and mitigate the attack.
 The results demonstrate that the IDS successfully protects the network against the flooding attack. When the attack begins, there is a brief period of disruption lasting approximately fifteen milliseconds during which legitimate traffic is affected. This initial disruption period corresponds to the detection latency of the IDS—the time required for the frequency analysis algorithm to accumulate enough evidence of flooding to trigger the blocklist addition. During these first fifteen milliseconds, the Attacker's high-priority frames monopolize the bus just as they did in the unprotected case, and legitimate messages from the Sender fail to transmit.
+
+**IDS Protection Timeline**
+
+```
+Time (milliseconds from attack start)
+0         15        20          60000     60010
+|---------|---------|-----------|---------|------
+|         |         |           |         |
+| Attack  |Detection|Protected  | Attack  | Normal
+| Begins  |Complete |Operation  | Ends    | Resume
+|         |         |           |         |
++---------+---------+-----------+---------+------
+
+IDS Actions:
+|<-- Freq Analysis -->|
+|  Counting msgs      |
+|  in window          |
+                      |
+                      +- Threshold exceeded
+                      +- Add 0x000 to blocklist
+                      +- Update HW filters
+                         |
+                         +-------> Attack traffic blocked
+
+Legitimate Traffic:
+XXXXX>     (gap)      >XXXXXXXXXXXXXXXXXXXX>XXXXXXXXX
+  ^          ^              ^                  ^
+Normal    Lost msgs    Protected delivery  Continues
+traffic   (detection   (114/120 received)  normally
+          window)
+
+Packet Delivery Ratio:
+100%  ->   0%    ->    95%      ->     95%    ->  100%
+```
+
 However, at approximately the fifteen-millisecond mark, we observe the IDS taking action. The serial log from the Receiver shows a message indicating that identifier zero x zero zero zero has been flagged for excessive transmission frequency and added to the blocklist. Immediately following this detection, the IDS configures the TWAI controller's hardware acceptance filters to reject all frames with this identifier. From this point forward, attack frames are rejected at the hardware level before they even reach the receive buffer or consume any CPU time for processing.
+
 The immediate effect of this blocking is dramatic. Legitimate traffic from the Sender resumes arriving at the Receiver within milliseconds of the blocklist update. For the remainder of the sixty-second attack period, the Receiver continues to successfully receive legitimate messages at the expected two hertz rate with minimal disruption. Analysis of the complete data set shows that of the one hundred twenty legitimate messages that the Sender transmits during the attack period, one hundred fourteen are successfully received by the IDS-protected Receiver. The six missed messages all occurred during the initial fifteen-millisecond detection window. This represents a packet delivery ratio of ninety-five percent during the attack, compared to zero percent in the unprotected case.
 The key to understanding why the IDS can protect against the attack despite the Attacker's high-priority frames involves recognizing what blocking actually accomplishes. The IDS cannot prevent the Attacker from transmitting frames on the bus—those high-priority frames will still win arbitration and consume bus bandwidth. However, by configuring its hardware filters to ignore the attack traffic, the IDS ensures that its own receive buffer is not filled with attack frames. This means the IDS's CAN controller remains available to receive legitimate traffic when it does appear on the bus.
 But how can legitimate traffic appear on the bus at all if the Attacker is continuously transmitting high-priority frames? The answer lies in subtle timing considerations and the fact that the Attacker cannot truly maintain one hundred percent bus utilization. There are mandatory gaps between frames required by the CAN protocol, and there are brief periods when the Attacker's transmit buffer is being refilled by software. During these tiny gaps, which might last only a few bit times, a legitimate node can begin transmission. If the legitimate node wins arbitration during its transmission (which happens when the Attacker is not transmitting), the legitimate frame can complete successfully.
@@ -804,8 +863,10 @@ Beyond the immediate communication loss, the flooding attack triggers state chan
 When a node's transmit error counter exceeds one hundred twenty-seven, the node enters Error Passive state. In this state, the node can still attempt to transmit, but it must wait longer after detecting errors before retrying, and it signals errors differently to avoid disrupting the network. Our experimental data shows that under sustained flooding attack, legitimate nodes enter Error Passive state within approximately five hundred milliseconds to two seconds, depending on how frequently they attempt to transmit. This state transition is visible in the diagnostic output from the CAN controllers and can be verified by observing changes in the error signaling on the bus.
 If the attack continues and the transmit error counter exceeds two hundred fifty-five, the node enters Bus-Off state and completely disconnects from the network. Recovery from Bus-Off state requires explicit intervention, either through a software command or an automatic recovery procedure after a timeout period. In our experiments with attack durations of sixty seconds, we occasionally observed legitimate nodes reaching Bus-Off state, though this was not consistent across all trials. The variability appears to depend on the precise timing of transmission attempts relative to the attack traffic patterns.
 The IDS mitigates all of these impacts by detecting the attack quickly and blocking the malicious traffic at the hardware level. Because the attack traffic is rejected before it fills the receive buffers or is processed by the CAN controller's error checking logic, the legitimate nodes continue to receive messages successfully. The key insight is that blocking attack traffic at the receiver does not prevent the attack traffic from existing on the bus—the attacker continues to transmit high-priority frames that win arbitration. However, by ignoring this attack traffic, the IDS-protected receiver remains available to receive legitimate traffic during the brief gaps when legitimate nodes do manage to transmit.
-State Transition Analysis: Victim Node Behavior
 
+**State Transition Analysis: Victim Node Behavior**
+
+```
 Without IDS Protection:
 
 Time:  0s      0.5s     2.0s     5.0s     60s      60.2s
@@ -839,6 +900,8 @@ TEC: 0 ------------------------------------------------- 0
          No errors, TEC remains at zero            Normal
          (Attack traffic blocked before           operation
          affecting node state)                     maintained
+```
+
 Our analysis of bus utilization patterns provides additional insight into how the IDS maintains functionality during attacks. Without the IDS, the attack traffic achieves approximately ninety-nine point eight percent bus utilization, leaving essentially no bandwidth for legitimate traffic. The attacker transmits frames continuously, separated only by the mandatory interframe spacing required by the protocol. With the IDS blocking the attack traffic at the receiver, the overall bus utilization pattern changes significantly. The attack traffic still occupies approximately seventy to eighty percent of the bus bandwidth, as the attacker continues transmitting regardless of whether anyone is listening. However, legitimate traffic now occupies an additional ten to fifteen percent of bandwidth, as legitimate nodes can occasionally win arbitration and transmit successfully. The remaining bandwidth is consumed by error frames, acknowledgment sequences, and interframe spacing.
 This analysis reveals an important characteristic of our defense approach: it is a receiver-side defense that protects individual nodes rather than cleaning up the entire network. The attack traffic still exists on the bus and still consumes bandwidth. The benefit is that protected nodes can filter out this attack traffic and remain operational, whereas unprotected nodes are completely overwhelmed. In a real vehicle deployment, this suggests that the IDS would ideally be deployed on all critical nodes, or alternatively as a gateway that bridges between the potentially compromised bus segment and a protected bus segment containing critical safety systems.
 ### 8.3 Comparative Analysis of Detection Algorithms
