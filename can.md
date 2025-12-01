@@ -449,4 +449,155 @@ Signal integrity also depends on proper grounding. All three nodes must share a 
 
 Once the hardware is assembled, we can verify proper operation before loading our custom firmware. Using standard CAN analysis tools or even simple test firmware that transmits periodic messages, we can confirm that frames are being successfully transmitted and received. We can use an oscilloscope to observe the CAN_H and CAN_L signals and verify that they show the expected voltage levels and that the differential voltage represents the data being transmitted. This hardware verification step is important because it eliminates the physical layer as a source of problems when we later debug our IDS implementation.
 
+6.2 Attacker Firmware Architecture and State Machine Implementation
+The attacker firmware, which we have designated with the somewhat playful name "evil_doggie," is designed to simulate the behavior of a compromised Electronic Control Unit that has been taken over by an adversary. While the name may be whimsical, the functionality it implements represents a serious threat that could have severe consequences in a real vehicle environment. The purpose of this firmware is educational: by demonstrating how easily a malicious node can disrupt CAN communications, we illustrate the critical need for the defensive mechanisms that our IDS provides.
+The architecture of the attacker firmware is built around a state machine that controls the attack behavior. State machines are a fundamental design pattern in embedded systems, particularly appropriate here because they provide a clear, maintainable way to manage the different operational modes of the attacker. The state machine approach also makes it easy to extend the firmware in the future to implement additional attack types beyond the flooding attack we currently demonstrate.
+The state machine begins in an IDLE state when the system powers up. In this state, the firmware initializes the hardware peripherals, including the TWAI controller and the serial console interface, but does not transmit any messages on the CAN bus. The system remains passive, allowing observation of normal bus traffic. This idle state is important for two reasons. First, it allows us to establish baseline measurements of normal network behavior before launching an attack. Second, it demonstrates that the attack is under operator control rather than being automatically triggered on power-up, which would make experimentation more difficult.
+From the IDLE state, the operator can issue a command through the serial console to transition to the FLOOD state. This command might be as simple as typing "attack start" or pressing a designated key. When the state machine enters the FLOOD state, the attack begins immediately. The firmware constructs a CAN frame with the highest priority identifier, zero x zero zero zero, and fills the data field with eight bytes of arbitrary data. We use the value zero x F F for all data bytes, though the actual payload content is irrelevant for the denial-of-service effect we are creating. The frame is then queued for transmission to the TWAI controller.
+The critical aspect of the flooding attack implementation is maintaining continuous transmission without gaps. As soon as the TWAI controller completes transmission of one frame and signals this completion through an interrupt or status flag, the firmware immediately constructs and queues the next frame. This tight loop ensures that the bus is continuously occupied by our high-priority messages, giving legitimate nodes no opportunity to win arbitration and transmit their own messages.
+However, there is one practical consideration we must handle: the finite size of the TWAI controller's transmit buffer. The ESP32's TWAI peripheral can queue a small number of frames for transmission, but if our software attempts to queue frames faster than the hardware can transmit them, the buffer will overflow. Our implementation handles this by checking the buffer status before attempting to queue each frame. If the buffer is full, indicated by a TxBufferFull error, the code enters a brief busy-wait loop, repeatedly checking the status until space becomes available. In practice, at five hundred kilobits per second, the hardware can transmit frames fast enough that this busy-wait rarely occurs, but including this check prevents the firmware from losing track of frames or entering an error state.
+The firmware also implements a FLOOD_STOP state that can be entered by operator command. In this state, the continuous transmission of attack frames ceases, but the system does not immediately return to IDLE. Instead, it remains in FLOOD_STOP to allow observation of how the network recovers after the attack ends. This is valuable for understanding the resilience characteristics of the system and for debugging the IDS behavior. From FLOOD_STOP, another command can transition back to IDLE, completing the state cycle.
+Attacker State Machine Diagram
+
+                    ┌──────────┐
+         Power On   │          │
+            ────────▶   IDLE   │
+                    │          │
+                    └─────┬────┘
+                          │
+                "attack"  │
+                 command  │
+                          ▼
+                    ┌──────────┐
+                    │  FLOOD   │◀─────┐
+                    │          │      │
+                    └─────┬────┘      │
+                          │           │
+                          │    Transmit loop:
+                 "stop"   │    - Build frame (ID: 0x000)
+                 command  │    - Queue to TWAI
+                          │    - Check buffer status
+                          │           │
+                          ▼           │
+                    ┌──────────┐      │
+                    │FLOOD_STOP│──────┘
+                    │          │
+                    └─────┬────┘
+                          │
+                 "reset"  │
+                 command  │
+                          ▼
+                    ┌──────────┐
+                    │   IDLE   │
+                    └──────────┘
+The implementation in Rust leverages the type system and pattern matching to make the state machine both safe and maintainable. We define an enumeration type representing the possible states, and use pattern matching to handle the transitions and behaviors associated with each state. The Rust compiler ensures that we handle all possible states and that state transitions are explicit and type-safe. This eliminates entire categories of bugs that might occur in a C implementation using integer state variables and if-else chains.
+The serial console interface deserves special mention, as it provides the human-machine interface for controlling the attacker. We implement a simple command-line interface that accepts text commands over the USB serial connection. The operator can type commands to view the current state, trigger state transitions, or query statistics about how many frames have been transmitted. This interface is implemented as a separate asynchronous task that runs concurrently with the attack logic, demonstrating Embassy's ability to manage multiple concurrent operations. The serial task waits for incoming characters, accumulates them into a buffer until a newline is received, parses the resulting command string, and then triggers the appropriate state transition or action.
+6.3 Defense Module Implementation: IDS Architecture
+The Intrusion Detection System represents the core contribution of this project. While the attacker firmware demonstrates a known vulnerability, the IDS firmware shows that effective defense is possible even on resource-constrained embedded systems. The IDS implementation combines multiple detection techniques into a cohesive system that can identify and respond to flooding attacks in real-time.
+The overall architecture of the IDS is designed as a modular pipeline that processes each incoming CAN frame through a series of inspection stages. This pipeline architecture makes the system extensible—new detection algorithms can be added as additional pipeline stages—and maintainable, as each stage has a well-defined interface and responsibility. The pipeline is implemented within the receive path of the firmware, so every frame that arrives from the CAN bus passes through the IDS before being delivered to the application layer for processing.
+The first stage of the pipeline is signature-based detection using a blocklist. The IDS maintains a small array of message identifiers that have been flagged as suspicious or malicious. When a frame enters the IDS pipeline, the first check is a simple lookup: is this frame's identifier present in the blocklist? If so, the frame is immediately rejected, and no further processing occurs. This provides fast, deterministic protection against known malicious identifiers.
+The blocklist itself is implemented as a fixed-size array stored in the microcontroller's RAM. For our demonstration system, we allocate space for up to sixteen blocked identifiers, which is more than sufficient for the attack scenarios we demonstrate but small enough that the linear search through the array completes in a few microseconds. In a production system, the size might be adjusted based on the expected threat model and available memory. The blocklist is initially empty when the system boots, and identifiers are added dynamically by other components of the IDS as suspicious behavior is detected.
+The second major component of the IDS is the anomaly-based frequency analysis engine. This component monitors the rate at which messages appear on the bus, specifically looking for the abnormally high transmission rates characteristic of a flooding attack. The challenge is to detect flooding quickly, with low latency, while avoiding false positives from legitimate bursts of traffic that might occur during normal vehicle operation.
+Our frequency analysis uses a sliding window algorithm with time-based bucketing. We maintain a small buffer that records the timestamps of recently received frames, organized by message identifier. When a new frame arrives, we examine the timestamps of previous frames with the same identifier. If we find that more than a threshold number of frames with this identifier have been received within a defined time window, we conclude that a flooding attack is in progress, and the identifier is added to the blocklist.
+The specific parameters of the sliding window require careful tuning. The window size represents the time period over which we count messages. Too short a window might trigger false positives from brief legitimate bursts. Too long a window increases detection latency, allowing the attack to continue longer before being identified. Through experimentation with our testbed, we found that a window of one hundred milliseconds provides a good balance. The threshold count similarly requires tuning. We set the threshold at fifty messages per window, reasoning that no legitimate message in a typical vehicle network should appear at rates exceeding five hundred hertz. A flooding attack, which aims for maximum bus utilization, will easily exceed this threshold within the first window period.
+IDS Processing Pipeline
+
+Incoming CAN Frame
+      │
+      ▼
+┌──────────────────┐
+│ Frame Reception  │
+│ (TWAI Hardware)  │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│  Stage 1: Blocklist      │
+│  Check                   │
+│  - Is ID in blocklist?   │
+│  - If YES → DROP         │
+│  - If NO → Continue      │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│  Stage 2: Frequency      │
+│  Analysis                │
+│  - Count msgs in window  │
+│  - Exceeds threshold?    │
+│  - If YES → Add to block │
+│            → DROP        │
+│  - If NO → Continue      │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│  Stage 3: Application    │
+│  Delivery                │
+│  - Process frame data    │
+│  - Update vehicle state  │
+└──────────────────────────┘
+The implementation of the sliding window in Rust makes use of the language's powerful iterator and collection abstractions. We store timestamps in a circular buffer, and when checking for flooding, we use iterator methods to filter timestamps within the window and count them. The Rust standard library provides these operations with excellent performance, and the compiler's optimizations ensure that the generated code is as efficient as hand-written C would be.
+A crucial aspect of the IDS implementation is its real-time performance characteristics. The CAN bus operating at five hundred kilobits per second can deliver approximately three thousand eight hundred frames per second in the case of minimum-length frames, though typical traffic is much lower. Our IDS must process each frame with latency low enough that the receive buffer does not overflow. We achieve this through careful algorithm design and by leveraging the hardware acceleration provided by the TWAI controller's acceptance filters.
+The TWAI controller includes hardware filtering capability that can reject frames based on their identifiers before they are even placed in the receive buffer. We configure these hardware filters to immediately reject any identifiers in our blocklist, providing the fastest possible rejection with zero software overhead. When an identifier is added to the software blocklist by the frequency analysis engine, we also update the hardware filters to maintain consistency. This two-level filtering approach—hardware filters for speed, software analysis for intelligence—provides both performance and flexibility.
+6.4 Traffic Monitoring and Statistical Analysis
+Beyond the core intrusion detection algorithms, the IDS firmware implements comprehensive traffic monitoring and statistical analysis capabilities. These features serve multiple purposes: they provide visibility into network behavior for debugging and research, they generate the metrics needed to tune detection thresholds, and they enable automated reporting that could alert human operators to security events in a production deployment.
+The statistics module tracks several key metrics for each active message identifier observed on the bus. For each ID, we record the total number of frames received, the timestamp of the first and most recent frame, the minimum and maximum inter-arrival times between consecutive frames, and the current estimated transmission frequency. These statistics are updated in real-time as frames are processed, with minimal computational overhead.
+The frequency estimation deserves particular attention because it feeds directly into the anomaly detection logic. A naive approach would simply count the number of frames received in some fixed time period and divide by the period duration. However, this approach has poor responsiveness to changing conditions—the estimate only updates when each time period expires. We instead use an exponentially weighted moving average, or EWMA, which provides continuous updates and emphasizes recent observations while smoothly incorporating historical data.
+The EWMA calculation works as follows: when a frame arrives, we calculate the time delta since the previous frame with the same identifier. We then compute the instantaneous frequency as one divided by this delta. The estimated frequency is then updated as a weighted average of the previous estimate and this new instantaneous measurement, with the weighting factor determining how quickly the estimate adapts to changes. This gives us a frequency estimate that responds quickly to flooding attacks while filtering out noise from minor variations in transmission timing.
+The statistical data is accessible through the serial console interface, allowing operators to query current metrics at any time. We implement commands to display statistics for all active identifiers, to show detailed information about a specific identifier, or to dump the complete blocklist. This visibility is invaluable during development and testing, as it allows us to verify that the IDS is correctly observing traffic and applying detection logic. In a production deployment, these statistics might be logged to non-volatile storage or transmitted over a secure channel to a central security monitoring system.
+6.5 Response Mechanisms and Attack Mitigation
+Detecting an attack is only the first step; the IDS must also respond appropriately to mitigate the attack's impact and restore normal network operation. Our system implements several response mechanisms that activate when malicious traffic is identified.
+The immediate response to detecting a flooding attack is to add the offending identifier to the blocklist, preventing further frames with that identifier from being processed. This blocking action happens within milliseconds of the attack detection, minimizing the period during which the attack can affect the system. Once blocked, frames with that identifier are rejected at the hardware level by the TWAI controller's acceptance filters, ensuring they consume minimal system resources.
+However, simply blocking frames is not always sufficient, particularly in the case of a sophisticated attacker who might rotate through multiple identifiers or who might be flooding the bus so aggressively that even rejected frames impact performance. For these scenarios, we implement a more aggressive response: actively transmitting error frames to disrupt the attacker's transmissions.
+CAN error frames are a special frame type defined in the protocol for signaling that an error has been detected. When a node detects an error during frame reception or transmission, it transmits an error frame consisting of six consecutive dominant bits, violating the bit stuffing rule and thus signaling all other nodes that an error has occurred. We can exploit this mechanism defensively by deliberately transmitting error frames when we detect attack traffic, forcing the attacking node to abort its transmission and retry.
+This active response must be used judiciously, as excessive error frame transmission can itself disrupt legitimate traffic. Our implementation only activates the error frame response when the frequency analysis conclusively identifies a flooding attack in progress, and we rate-limit the error frames to avoid creating a new denial-of-service condition. The goal is to increase the cost and difficulty of the attack for the adversary while minimizing impact on legitimate network participants.
+The final layer of response is alerting and reporting. When the IDS detects and responds to an attack, it generates detailed log entries that record the identifier of the malicious frames, the timestamp when the attack was detected, the characteristics that triggered detection, and the actions taken in response. These logs are transmitted over the serial interface in real-time and could also be stored in the ESP32's flash memory for later forensic analysis.
+For critical security events, the IDS can also trigger visual or auditory alarms. In our testbed implementation, we simply flash an LED on the ESP32 development board when an attack is detected. In a vehicle deployment, this alert mechanism might illuminate a warning light on the dashboard or trigger an audible alert to notify the driver of a potential security compromise. The alert system is designed to be extensible, with a clear interface that allows additional alerting mechanisms to be added without modifying the core IDS logic.
+6.6 Integration Testing and Validation Methodology
+Before conducting formal experiments, we perform extensive integration testing to validate that all components of the system work correctly together. This testing phase is critical for identifying and resolving issues that might not be apparent when testing individual components in isolation.
+The first phase of integration testing focuses on basic connectivity and communication. We load simple test firmware on all three nodes and verify that they can successfully exchange messages. We start with just two nodes, configuring one as a transmitter sending periodic heartbeat messages and the other as a receiver logging all received frames. Once we confirm reliable two-node communication, we add the third node and verify that all three can see each other's traffic. This establishes confidence in the physical layer implementation before we introduce the complexity of the attack and defense mechanisms.
+Next, we test the attacker firmware in isolation. We load the evil_doggie firmware on one node and observe its behavior using a CAN bus analyzer, a specialized tool that connects to the bus and displays all traffic. We verify that in the IDLE state, the attacker transmits nothing. We trigger the transition to FLOOD state and confirm that the node begins continuously transmitting frames with identifier zero x zero zero zero. We measure the achieved transmission rate and verify that it matches our theoretical calculations for maximum bus utilization. We also observe the behavior of the other nodes during the attack, confirming that they lose arbitration and are unable to transmit.
+With confidence in the attacker firmware, we proceed to test the IDS firmware. We load the IDS firmware on the receiver node and initially test it with normal, non-attack traffic. We verify that legitimate messages are correctly received and processed, and that the statistics module accurately tracks traffic metrics. We intentionally vary the transmission patterns—sending bursts of messages, varying the identifiers, changing the data rates—to ensure the IDS does not generate false positives under normal operating conditions.
+The critical integration test combines all three nodes: sender, receiver with IDS, and attacker. We establish normal traffic patterns with the sender transmitting periodic messages. We verify that the IDS receiver successfully receives these messages and that statistics indicate normal operation. We then activate the attacker and observe the IDS response. Successful operation is indicated by the IDS detecting the flood within the expected latency window, adding the malicious identifier to the blocklist, and continuing to operate normally despite the ongoing attack. We verify that the sender node, protected by the IDS's actions, can still communicate, or at least degrades gracefully rather than entering bus-off state.
+Throughout integration testing, we pay particular attention to edge cases and failure modes. What happens if two nodes attempt to flood simultaneously? How does the IDS behave if it itself is flooded with legitimate traffic from many identifiers, exhausting its statistical tracking resources? Can an attacker craft attack patterns that exploit weaknesses in the detection algorithm? These adversarial test cases help us identify and address vulnerabilities in our defense mechanisms.
+We also conduct performance testing to quantify the computational overhead of the IDS. Using the ESP32's built-in timing facilities, we measure the CPU time consumed by IDS processing for each frame. We vary the traffic load from light (a few messages per second) to heavy (approaching maximum bus capacity) and measure how the processing time scales. We monitor memory usage to ensure we are not approaching the limits of the available RAM. These performance measurements give us confidence that the IDS can operate reliably in the demanding real-time environment of an automotive network, and they identify any bottlenecks that might need optimization.
+Integration Test Sequence
+
+Phase 1: Physical Layer Validation
+  ├─ Two-node ping-pong test
+  ├─ Three-node broadcast test
+  └─ Signal integrity verification
+       └─ PASS: All nodes communicate reliably
+
+Phase 2: Attacker Validation
+  ├─ State machine transitions
+  ├─ Flood transmission rate measurement
+  └─ Impact on victim nodes
+       └─ PASS: Attack achieves bus saturation
+
+Phase 3: IDS Baseline Testing
+  ├─ Normal traffic processing
+  ├─ Statistics accuracy
+  └─ False positive rate
+       └─ PASS: No false positives in 1-hour test
+
+Phase 4: Complete System Test
+  ├─ Establish normal traffic baseline
+  ├─ Activate flooding attack
+  ├─ Measure IDS detection latency
+  ├─ Verify attack mitigation
+  └─ Confirm system recovery
+       └─ PASS: Detection <15ms, effective mitigation
+
+Phase 5: Edge Case Testing
+  ├─ Simultaneous attacks from multiple IDs
+  ├─ Resource exhaustion scenarios
+  ├─ Rapid attack on/off cycling
+  └─ Combined attack + legitimate traffic
+       └─ Results documented for algorithm tuning
+The integration testing phase typically reveals issues that were not apparent in unit testing. For example, we discovered during testing that our initial frequency threshold was too sensitive, triggering false positives when the sender node transmitted bursts of messages in response to simulated events. We adjusted the threshold based on empirical data from these tests. We also found that the initial implementation of the blocklist had a race condition when the frequency analyzer and the hardware filter update logic accessed the list concurrently. Rust's borrow checker actually prevented us from compiling this buggy code, demonstrating the value of the language's safety guarantees.
+By the time we complete integration testing, we have high confidence that the system operates correctly and robustly. We have characterized its performance, we understand its limitations, and we have validated its core functionality: the ability to detect and mitigate CAN bus flooding attacks in real-time. With this foundation established, we are ready to proceed to formal experimental evaluation and performance measurement, which we will detail in the following chapters. The systematic approach to integration testing, combined with Rust's compile-time safety guarantees, gives us assurance that the results we obtain in formal testing will be reliable and reproducible
+
+
 ###
