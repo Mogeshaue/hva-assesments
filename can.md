@@ -361,32 +361,32 @@ The interface between the ESP32 and the SN65HVD230 is straightforward. Two GPIO 
 ```
 Hardware Architecture Diagram
 
-┌─────────────────────────────────────────┐
-│           ESP32 Module                   │
-│  ┌──────────────────────────────────┐   │
-│  │  Dual-Core Xtensa LX6            │   │
-│  │  240 MHz, 520KB RAM              │   │
-│  │                                  │   │
-│  │  ┌────────────────┐              │   │
-│  │  │ TWAI Controller│              │   │
-│  │  │ (CAN 2.0B)     │              │   │
-│  │  └────────┬───────┘              │   │
-│  └───────────┼──────────────────────┘   │
-│              │                          │
-│         TX ──┼── RX                     │
-└─────────────┼───┼──────────────────────┘
-              │   │
-       ┌──────▼───▼──────┐
-       │   SN65HVD230    │
-       │   CAN Transceiver│
-       │   3.3V Compatible│
-       └──────┬───┬───────┘
-              │   │
-        CAN_H │   │ CAN_L
-              │   │
-     ═════════╪═══╪════════  CAN Bus (Twisted Pair)
-              │   │
-         [120Ω Termination at each end]
++------------------------------------------+
+|           ESP32 Module                   |
+|  +-----------------------------------+   |
+|  |  Dual-Core Xtensa LX6            |   |
+|  |  240 MHz, 520KB RAM              |   |
+|  |                                  |   |
+|  |  +----------------+              |   |
+|  |  | TWAI Controller|              |   |
+|  |  | (CAN 2.0B)     |              |   |
+|  |  +-------+--------+              |   |
+|  +----------|------------------------+   |
+|             |                           |
+|         TX -+- RX                       |
++------------|---|-------------------------+
+             |   |
+       +-----v---v------+
+       |   SN65HVD230   |
+       | CAN Transceiver|
+       | 3.3V Compatible|
+       +-----+---+------+
+             |   |
+       CAN_H |   | CAN_L
+             |   |
+     ========+===+========  CAN Bus (Twisted Pair)
+             |   |
+        [120 Ohm Termination at each end]
 ```
 
 ### 5.5 Software Architecture and the Choice of Rust
@@ -424,23 +424,23 @@ Physical Wiring Diagram
 
 Node 1 (Sender)          Node 2 (Receiver/IDS)       Node 3 (Attacker)
      ESP32                      ESP32                       ESP32
-       │                          │                           │
-   ┌───┴───┐                  ┌───┴───┐                   ┌───┴───┐
-   │TX  RX │                  │TX  RX │                   │TX  RX │
-   └─┬───┬─┘                  └─┬───┬─┘                   └─┬───┬─┘
-     │   │                      │   │                       │   │
-  ┌──▼───▼──┐                ┌──▼───▼──┐                 ┌──▼───▼──┐
-  │SN65HVD  │                │SN65HVD  │                 │SN65HVD  │
-  │  230    │                │  230    │                 │  230    │
-  └─┬─────┬─┘                └─┬─────┬─┘                 └─┬─────┬─┘
-    │     │                    │     │                     │     │
-  H │     │ L                H │     │ L                 H │     │ L
-    │     │                    │     │                     │     │
-   [120Ω]════════════════════════════════════════════[120Ω]
-    │                           │                           │
-  CAN_H ─────────────────────────────────────────────── CAN_H
-  CAN_L ─────────────────────────────────────────────── CAN_L
-    │                           │                           │
+       |                          |                           |
+   +---+---+                  +---+---+                   +---+---+
+   |TX  RX |                  |TX  RX |                   |TX  RX |
+   +-+---+-+                  +-+---+-+                   +-+---+-+
+     |   |                      |   |                       |   |
+  +--v---v--+                +--v---v--+                 +--v---v--+
+  |SN65HVD  |                |SN65HVD  |                 |SN65HVD  |
+  |  230    |                |  230    |                 |  230    |
+  +-+-----+-+                +-+-----+-+                 +-+-----+-+
+    |     |                    |     |                     |     |
+  H |     | L                H |     | L                 H |     | L
+    |     |                    |     |                     |     |
+  [120Ohm]=====================================================[120Ohm]
+    |                           |                           |
+  CAN_H ------------------------------------------------- CAN_H
+  CAN_L ------------------------------------------------- CAN_L
+    |                           |                           |
   Termination              No Termination              Termination
   at bus end                                          at bus end
 ```
@@ -459,37 +459,37 @@ However, there is one practical consideration we must handle: the finite size of
 The firmware also implements a FLOOD_STOP state that can be entered by operator command. In this state, the continuous transmission of attack frames ceases, but the system does not immediately return to IDLE. Instead, it remains in FLOOD_STOP to allow observation of how the network recovers after the attack ends. This is valuable for understanding the resilience characteristics of the system and for debugging the IDS behavior. From FLOOD_STOP, another command can transition back to IDLE, completing the state cycle.
 Attacker State Machine Diagram
 
-                    ┌──────────┐
-         Power On   │          │
-            ────────▶   IDLE   │
-                    │          │
-                    └─────┬────┘
-                          │
-                "attack"  │
-                 command  │
-                          ▼
-                    ┌──────────┐
-                    │  FLOOD   │◀─────┐
-                    │          │      │
-                    └─────┬────┘      │
-                          │           │
-                          │    Transmit loop:
-                 "stop"   │    - Build frame (ID: 0x000)
-                 command  │    - Queue to TWAI
-                          │    - Check buffer status
-                          │           │
-                          ▼           │
-                    ┌──────────┐      │
-                    │FLOOD_STOP│──────┘
-                    │          │
-                    └─────┬────┘
-                          │
-                 "reset"  │
-                 command  │
-                          ▼
-                    ┌──────────┐
-                    │   IDLE   │
-                    └──────────┘
+                    +----------+
+         Power On   |          |
+            ------->|   IDLE   |
+                    |          |
+                    +-----+----+
+                          |
+                "attack"  |
+                 command  |
+                          v
+                    +----------+
+                    |  FLOOD   |<-----+
+                    |          |      |
+                    +-----+----+      |
+                          |           |
+                          |    Transmit loop:
+                 "stop"   |    - Build frame (ID: 0x000)
+                 command  |    - Queue to TWAI
+                          |    - Check buffer status
+                          |           |
+                          v           |
+                    +----------+      |
+                    |FLOOD_STOP|------+
+                    |          |
+                    +-----+----+
+                          |
+                 "reset"  |
+                 command  |
+                          v
+                    +----------+
+                    |   IDLE   |
+                    +----------+
 The implementation in Rust leverages the type system and pattern matching to make the state machine both safe and maintainable. We define an enumeration type representing the possible states, and use pattern matching to handle the transitions and behaviors associated with each state. The Rust compiler ensures that we handle all possible states and that state transitions are explicit and type-safe. This eliminates entire categories of bugs that might occur in a C implementation using integer state variables and if-else chains.
 The serial console interface deserves special mention, as it provides the human-machine interface for controlling the attacker. We implement a simple command-line interface that accepts text commands over the USB serial connection. The operator can type commands to view the current state, trigger state transitions, or query statistics about how many frames have been transmitted. This interface is implemented as a separate asynchronous task that runs concurrently with the attack logic, demonstrating Embassy's ability to manage multiple concurrent operations. The serial task waits for incoming characters, accumulates them into a buffer until a newline is received, parses the resulting command string, and then triggers the appropriate state transition or action.
 6.3 Defense Module Implementation: IDS Architecture
@@ -503,40 +503,40 @@ The specific parameters of the sliding window require careful tuning. The window
 IDS Processing Pipeline
 
 Incoming CAN Frame
-      │
-      ▼
-┌──────────────────┐
-│ Frame Reception  │
-│ (TWAI Hardware)  │
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  Stage 1: Blocklist      │
-│  Check                   │
-│  - Is ID in blocklist?   │
-│  - If YES → DROP         │
-│  - If NO → Continue      │
-└────────┬─────────────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  Stage 2: Frequency      │
-│  Analysis                │
-│  - Count msgs in window  │
-│  - Exceeds threshold?    │
-│  - If YES → Add to block │
-│            → DROP        │
-│  - If NO → Continue      │
-└────────┬─────────────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  Stage 3: Application    │
-│  Delivery                │
-│  - Process frame data    │
-│  - Update vehicle state  │
-└──────────────────────────┘
+      |
+      v
++------------------+
+| Frame Reception  |
+| (TWAI Hardware)  |
++--------+---------+
+         |
+         v
++--------------------------+
+|  Stage 1: Blocklist      |
+|  Check                   |
+|  - Is ID in blocklist?   |
+|  - If YES -> DROP        |
+|  - If NO -> Continue     |
++--------+-----------------+
+         |
+         v
++--------------------------+
+|  Stage 2: Frequency      |
+|  Analysis                |
+|  - Count msgs in window  |
+|  - Exceeds threshold?    |
+|  - If YES -> Add to block|
+|           -> DROP        |
+|  - If NO -> Continue     |
++--------+-----------------+
+         |
+         v
++--------------------------+
+|  Stage 3: Application    |
+|  Delivery                |
+|  - Process frame data    |
+|  - Update vehicle state  |
++--------------------------+
 The implementation of the sliding window in Rust makes use of the language's powerful iterator and collection abstractions. We store timestamps in a circular buffer, and when checking for flooding, we use iterator methods to filter timestamps within the window and count them. The Rust standard library provides these operations with excellent performance, and the compiler's optimizations ensure that the generated code is as efficient as hand-written C would be.
 A crucial aspect of the IDS implementation is its real-time performance characteristics. The CAN bus operating at five hundred kilobits per second can deliver approximately three thousand eight hundred frames per second in the case of minimum-length frames, though typical traffic is much lower. Our IDS must process each frame with latency low enough that the receive buffer does not overflow. We achieve this through careful algorithm design and by leveraging the hardware acceleration provided by the TWAI controller's acceptance filters.
 The TWAI controller includes hardware filtering capability that can reject frames based on their identifiers before they are even placed in the receive buffer. We configure these hardware filters to immediately reject any identifiers in our blocklist, providing the fastest possible rejection with zero software overhead. When an identifier is added to the software blocklist by the frequency analysis engine, we also update the hardware filters to maintain consistency. This two-level filtering approach—hardware filters for speed, software analysis for intelligence—provides both performance and flexibility.
@@ -612,18 +612,18 @@ The third node is the Attacker, running the evil_doggie firmware. This node begi
 The physical topology of these three nodes deserves consideration. While CAN is a bus topology where all nodes are electrically equivalent once properly connected, the physical arrangement on our breadboard does create a linear ordering. We position the nodes in the order Sender, Receiver, Attacker, with the Sender and Attacker at the physical ends of the bus where we place the termination resistors. This arrangement means the Receiver is in the middle, which is actually slightly advantageous for signal integrity since it is equidistant from both terminators. In a real vehicle, nodes would be distributed throughout the chassis with a more complex physical topology, but our linear arrangement is adequate for experimental purposes and simplifies the physical construction.
 Experimental Testbed Node Configuration
 
-┌─────────────────────────────────────────────────────────────────┐
-│                         CAN Bus Network                          │
-│                         (500 kbps)                               │
-└─────────────────────────────────────────────────────────────────┘
-          │                    │                    │
-          │                    │                    │
-    ┌─────▼─────┐        ┌─────▼─────┐       ┌─────▼─────┐
-    │  Node 1   │        │  Node 2   │       │  Node 3   │
-    │  SENDER   │        │ RECEIVER  │       │ ATTACKER  │
-    └───────────┘        └───────────┘       └───────────┘
-          │                    │                    │
-          │                    │                    │
++-----------------------------------------------------------------+
+|                         CAN Bus Network                         |
+|                         (500 kbps)                              |
++-----------------------------------------------------------------+
+          |                    |                    |
+          |                    |                    |
+    +-----v-----+        +-----v-----+       +-----v-----+
+    |  Node 1   |        |  Node 2   |       |  Node 3   |
+    |  SENDER   |        | RECEIVER  |       | ATTACKER  |
+    +-----------+        +-----------+       +-----------+
+          |                    |                    |
+          |                    |                    |
     Transmits:           Runs IDS:             States:
     - ID: 0x123          - Monitors all        - IDLE
     - Rate: 2 Hz         - Detects flood       - FLOOD
@@ -632,19 +632,19 @@ Experimental Testbed Node Configuration
        0xBE, 0xEF,       
        0xCA, 0xFE,       
        0xBA, 0xBE]       
-          │                    │                    │
-          ▼                    ▼                    ▼
-    [120Ω Term]          (No Term)            [120Ω Term]
-          │                    │                    │
-          │                    │                    │
+          |                    |                    |
+          v                    v                    v
+   [120 Ohm Term]         (No Term)           [120 Ohm Term]
+          |                    |                    |
+          |                    |                    |
        USB Serial          USB Serial           USB Serial
-          │                    │                    │
-          ▼                    ▼                    ▼
-    ┌──────────┐        ┌──────────┐         ┌──────────┐
-    │ PC #1    │        │ PC #2    │         │ PC #3    │
-    │ Monitor  │        │ Data     │         │ Attack   │
-    │          │        │ Collection│        │ Control  │
-    └──────────┘        └──────────┘         └──────────┘
+          |                    |                    |
+          v                    v                    v
+    +----------+        +----------+         +----------+
+    | PC #1    |        | PC #2    |         | PC #3    |
+    | Monitor  |        | Data     |         | Attack   |
+    |          |        |Collection|         | Control  |
+    +----------+        +----------+         +----------+
 The computers connected to each node serve different purposes in the experimental setup. The computer connected to the Sender node is used primarily for monitoring and verification, allowing us to confirm that the Sender is operating as expected and transmitting its periodic messages. The computer connected to the Receiver is the primary data collection point, running logging software that captures all output from the IDS, timestamping each event with microsecond precision. This data forms the basis of our performance analysis and validation. The computer connected to the Attacker serves as the command and control interface, allowing the experimenter to precisely control when attacks begin and end.
 7.2 Baseline Characterization Experiments
 Before we can meaningfully evaluate the effectiveness of our intrusion detection system, we must first establish baseline measurements that characterize the normal operation of the network and quantify any overhead introduced by the IDS itself. These baseline experiments are conducted in three configurations: the network with no IDS, the network with the IDS present but in a passive monitoring mode, and the network with the IDS in active protection mode. Comparing these configurations allows us to isolate the performance impact of the IDS from other factors.
@@ -666,15 +666,15 @@ Attack Effectiveness Timeline (No IDS)
 
 Time (seconds)
 0         30        30.008      90        90.2      120
-│─────────│─────────│───────────│─────────│─────────│
-│         │         │           │         │         │
-│ Normal  │ Attack  │  ATTACK   │Attack   │Recovery │
-│Operation│ Starts  │   ACTIVE  │ Stops   │Complete │
-│         │         │           │         │         │
-└─────────┴─────────┴───────────┴─────────┴─────────┘
+|---------|---------|-----------|---------|---------|
+|         |         |           |         |         |
+| Normal  | Attack  |  ATTACK   |Attack   |Recovery |
+|Operation| Starts  |   ACTIVE  | Stops   |Complete |
+|         |         |           |         |         |
++---------+---------+-----------+---------+---------+
 
 Legitimate Traffic Flow:
-████████████▌                              ▌██████████
+XXXXXXXXXXXX>                              >XXXXXXXXXX
   ^           ^                            ^
   Normal      Last legit                   First legit
   traffic     msg received                 msg after
@@ -682,12 +682,12 @@ Legitimate Traffic Flow:
               attack start)                (200ms delay)
 
 Bus Utilization:
-20% avg   →  99.8%  ←  Saturated  →  99.8%  →  20% avg
-            (Attack traffic only)
+20% avg   ->  99.8%  <- Saturated  ->  99.8%  ->  20% avg
+             (Attack traffic only)
 
 Sender Node State:
-Error Active  →  Error Passive  →  Error Passive  →  Error Active
-                 (TEC > 127)                         (Recovery)
+Error Active  ->  Error Passive  ->  Error Passive  ->  Error Active
+                  (TEC > 127)                          (Recovery)
 We repeat these attack experiments multiple times to verify consistency and to gather statistical data. Across ten repetitions, the results are remarkably consistent: attack traffic always achieves greater than ninety-nine percent bus utilization, legitimate traffic is always completely blocked within ten milliseconds of attack start, and recovery after attack end always occurs within three hundred milliseconds. This consistency confirms that the flooding attack is deterministic and highly effective against unprotected networks.
 7.4 Defense Effectiveness Experiments With IDS Active
 The critical experiments are those that evaluate the performance of our intrusion detection system in protecting against the flooding attack. For these experiments, the Receiver runs the full IDS firmware in active protection mode. The experimental protocol is similar to the attack effectiveness experiments: we begin with thirty seconds of normal operation, then trigger a sixty-second attack, then observe recovery for thirty seconds. However, now the IDS is actively monitoring traffic and should detect and mitigate the attack.
@@ -701,21 +701,21 @@ IDS Protection Timeline
 
 Time (ms from attack start)
 0         5         10        15        20        100     60000
-│─────────│─────────│─────────│─────────│─────────│───────│
-│         │         │         │         │         │       │
-│ Attack  │ IDS     │ IDS     │ Legit   │ Normal  │ Attack│
-│ Begins  │Analyzing│ Detects │ Traffic │ Operation│ Ends │
-│         │         │ Flood   │ Resumes │ Protected│      │
-│         │         │         │         │         │       │
-└─────────┴─────────┴─────────┴─────────┴─────────┴───────┘
+|---------|---------|---------|---------|---------|-------|
+|         |         |         |         |         |       |
+| Attack  | IDS     | IDS     | Legit   | Normal  | Attack|
+| Begins  |Analyzing| Detects | Traffic | Operation| Ends |
+|         |         | Flood   | Resumes | Protected|      |
+|         |         |         |         |         |       |
++---------+---------+---------+---------+---------+-------+
 
 IDS State:
-Normal → Analyzing → ALERT → Blocking → Blocking → ...
+Normal -> Analyzing -> ALERT -> Blocking -> Blocking -> ...
 
 Actions Taken:
-         └─Count msgs      └─Add 0x000   └─Continue
+         +-Count msgs      +-Add 0x000   +-Continue
            in window         to blocklist   monitoring
-                           └─Update HW
+                           +-Update HW
                              filters
 
 Legitimate Message Reception:
@@ -762,34 +762,34 @@ The true positive rate, measuring the IDS's ability to detect actual attacks, wa
 Packet delivery ratio during attacks provides insight into how well the IDS maintains network functionality under adversarial conditions. Without the IDS present, the flooding attack reduced the packet delivery ratio for legitimate traffic to zero—not a single legitimate message was successfully received during the attack period. With the IDS active, the packet delivery ratio during attack averaged ninety-four point seven percent across all trials. This means that of the one hundred twenty legitimate messages transmitted during a typical sixty-second attack period, approximately one hundred fourteen were successfully received. The lost messages occurred primarily during the initial detection window, with occasional additional losses due to timing conflicts between legitimate traffic and residual attack traffic that still occupied the bus even after blocking was activated.
 Performance Metrics Summary Table
 
-┌─────────────────────────────────┬──────────────┬──────────────┐
-│ Metric                          │ Without IDS  │ With IDS     │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Detection Latency               │ N/A          │ 12.3 ms      │
-│                                 │              │ (±3.2 ms)    │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ False Positive Rate             │ N/A          │ 0 per hour   │
-│                                 │              │ (0/20 hrs)   │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ True Positive Rate              │ N/A          │ 100%         │
-│                                 │              │ (50/50)      │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Packet Delivery During Attack   │ 0%           │ 94.7%        │
-│                                 │ (0/120)      │ (114/120)    │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Messages Lost (60s attack)      │ 120          │ 6.4 avg      │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Bus Utilization (during attack) │ 99.8%        │ 85.3%        │
-│                                 │ (attack only)│ (mixed)      │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ CPU Overhead (normal traffic)   │ 1.2%         │ 5.8%         │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ CPU Overhead (under attack)     │ N/A          │ 18.4%        │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Memory Usage                    │ 8 KB         │ 24 KB        │
-├─────────────────────────────────┼──────────────┼──────────────┤
-│ Recovery Time After Attack      │ 200-300 ms   │ <10 ms       │
-└─────────────────────────────────┴──────────────┴──────────────┘
++---------------------------------+--------------+--------------+
+| Metric                          | Without IDS  | With IDS     |
++---------------------------------+--------------+--------------+
+| Detection Latency               | N/A          | 12.3 ms      |
+|                                 |              | (±3.2 ms)    |
++---------------------------------+--------------+--------------+
+| False Positive Rate             | N/A          | 0 per hour   |
+|                                 |              | (0/20 hrs)   |
++---------------------------------+--------------+--------------+
+| True Positive Rate              | N/A          | 100%         |
+|                                 |              | (50/50)      |
++---------------------------------+--------------+--------------+
+| Packet Delivery During Attack   | 0%           | 94.7%        |
+|                                 | (0/120)      | (114/120)    |
++---------------------------------+--------------+--------------+
+| Messages Lost (60s attack)      | 120          | 6.4 avg      |
++---------------------------------+--------------+--------------+
+| Bus Utilization (during attack) | 99.8%        | 85.3%        |
+|                                 | (attack only)| (mixed)      |
++---------------------------------+--------------+--------------+
+| CPU Overhead (normal traffic)   | 1.2%         | 5.8%         |
++---------------------------------+--------------+--------------+
+| CPU Overhead (under attack)     | N/A          | 18.4%        |
++---------------------------------+--------------+--------------+
+| Memory Usage                    | 8 KB         | 24 KB        |
++---------------------------------+--------------+--------------+
+| Recovery Time After Attack      | 200-300 ms   | <10 ms       |
++---------------------------------+--------------+--------------+
 Computational overhead measurements reveal that the IDS implementation is efficient enough for deployment on resource-constrained embedded systems. Under normal traffic conditions with only legitimate messages at two hertz, the IDS consumes an average of five point eight percent of the ESP32's CPU capacity. This overhead includes the cost of maintaining the sliding window statistics, checking the blocklist, and updating the frequency estimates. During an active attack, when the IDS is processing both attack traffic and legitimate traffic while also performing blocking operations, CPU utilization rises to approximately eighteen point four percent. Even this elevated utilization leaves substantial processing headroom for the application-layer control algorithms that would typically run on an Electronic Control Unit.
 Memory consumption is equally modest. The baseline firmware without IDS uses approximately eight kilobytes of RAM for its receive buffers and operational data structures. The IDS firmware uses approximately twenty-four kilobytes, an increase of sixteen kilobytes. This additional memory is allocated to the sliding window timestamp buffers, the blocklist data structure, the statistics tracking arrays, and the logging buffers. Given that modern automotive microcontrollers typically have several hundred kilobytes to several megabytes of RAM, this memory overhead is quite acceptable.
 Network recovery time after an attack ends is significantly improved with the IDS present. Without the IDS, when an attack ends, the legitimate nodes that have entered Error Passive or Bus-Off states must go through their recovery procedures before normal communication resumes. This recovery takes between two hundred and three hundred milliseconds in our experiments. With the IDS actively blocking attack traffic, the legitimate nodes never enter error states, so when the attack ends, normal traffic resumes almost immediately. The measured recovery time with IDS protection averages less than ten milliseconds, representing just the time for the next scheduled legitimate message to be transmitted.
@@ -805,33 +805,33 @@ State Transition Analysis: Victim Node Behavior
 Without IDS Protection:
 
 Time:  0s      0.5s     2.0s     5.0s     60s      60.2s
-State: EA  →   EA   →   EP   →   EP   →   EP   →   EA
-       │       │        │        │        │        │
-       │       │        │        │        │        └─ Recovers
-       │       │        │        │        └─ Attack ends
-       │       │        │        └─ TEC continues high
-       │       │        └─ TEC > 127 (Error Passive)
-       │       └─ TEC rising rapidly
-       └─ Attack begins, TEC starts incrementing
+State: EA  ->  EA   ->  EP   ->  EP   ->  EP   ->  EA
+       |       |        |        |        |        |
+       |       |        |        |        |        +- Recovers
+       |       |        |        |        +- Attack ends
+       |       |        |        +- TEC continues high
+       |       |        +- TEC > 127 (Error Passive)
+       |       +- TEC rising rapidly
+       +- Attack begins, TEC starts incrementing
 
-TEC: 0 ──▲──▲──▲──▲──▲──▲──▲──▲──▲──▲──▲─────▼────▼─── 0
-         │  │  │  │  │  │  │  │  │  │  │      │    │
+TEC: 0 --^--^--^--^--^--^--^--^--^--^--^-----v----v--- 0
+         |  |  |  |  |  |  |  |  |  |  |      |    |
          Repeated arbitration losses    128   255   Recovery
-         increment TEC by 8 each               │
+         increment TEC by 8 each               |
                                     Bus-Off threshold
 
 With IDS Protection:
 
 Time:  0s      0.015s   0.020s   60s
-State: EA  →   EA   →   EA   →   EA
-       │       │        │        │
-       │       │        │        └─ Normal operation continues
-       │       │        └─ Attack blocked, node protected
-       │       └─ IDS detects, adds to blocklist
-       └─ Attack begins
+State: EA  ->  EA   ->  EA   ->  EA
+       |       |        |        |
+       |       |        |        +- Normal operation continues
+       |       |        +- Attack blocked, node protected
+       |       +- IDS detects, adds to blocklist
+       +- Attack begins
 
-TEC: 0 ─────────────────────────────────────────────── 0
-         │                                          │
+TEC: 0 ------------------------------------------------- 0
+         |                                          |
          No errors, TEC remains at zero            Normal
          (Attack traffic blocked before           operation
          affecting node state)                     maintained
@@ -844,31 +844,31 @@ The sliding window approach we ultimately implemented addresses these weaknesses
 We also experimented with a more sophisticated approach based on statistical anomaly detection using the exponentially weighted moving average of inter-arrival times. In this approach, we maintain a running estimate of the expected inter-arrival time for each message identifier and trigger an alert when the actual inter-arrival time deviates significantly from the expected value for a sustained period. This approach has the advantage of automatically adapting to the normal transmission patterns of each identifier rather than using fixed thresholds. However, our experiments revealed that the additional complexity did not provide proportional benefits for our flooding attack scenario. The EWMA approach performed similarly to the sliding window in terms of detection accuracy and latency, but required more computational resources and was more difficult to tune. We concluded that for the specific threat model of flooding attacks, the simpler sliding window approach offers the best balance of performance, efficiency, and maintainability.
 Detection Algorithm Comparison
 
-┌──────────────────┬─────────────┬─────────────┬─────────────┐
-│ Algorithm        │ Static Rate │ Sliding     │ EWMA        │
-│                  │ Threshold   │ Window      │ Statistical │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Detection        │ 18.5 ms     │ 12.3 ms     │ 11.8 ms     │
-│ Latency (avg)    │             │             │             │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ False Positive   │ 0.3/hour    │ 0/hour      │ 0.1/hour    │
-│ Rate             │             │             │             │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ CPU Overhead     │ 3.2%        │ 5.8%        │ 8.4%        │
-│ (normal)         │             │             │             │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Memory Usage     │ 4 KB        │ 16 KB       │ 12 KB       │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Evasion          │ Easy        │ Difficult   │ Difficult   │
-│ Difficulty       │ (rate limit)│             │             │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Adaptability     │ Low         │ Medium      │ High        │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Implementation   │ Very Simple │ Moderate    │ Complex     │
-│ Complexity       │             │             │             │
-├──────────────────┼─────────────┼─────────────┼─────────────┤
-│ Tuning Required  │ Minimal     │ Moderate    │ Extensive   │
-└──────────────────┴─────────────┴─────────────┴─────────────┘
++------------------+-------------+-------------+-------------+
+| Algorithm        | Static Rate | Sliding     | EWMA        |
+|                  | Threshold   | Window      | Statistical |
++------------------+-------------+-------------+-------------+
+| Detection        | 18.5 ms     | 12.3 ms     | 11.8 ms     |
+| Latency (avg)    |             |             |             |
++------------------+-------------+-------------+-------------+
+| False Positive   | 0.3/hour    | 0/hour      | 0.1/hour    |
+| Rate             |             |             |             |
++------------------+-------------+-------------+-------------+
+| CPU Overhead     | 3.2%        | 5.8%        | 8.4%        |
+| (normal)         |             |             |             |
++------------------+-------------+-------------+-------------+
+| Memory Usage     | 4 KB        | 16 KB       | 12 KB       |
++------------------+-------------+-------------+-------------+
+| Evasion          | Easy        | Difficult   | Difficult   |
+| Difficulty       | (rate limit)|             |             |
++------------------+-------------+-------------+-------------+
+| Adaptability     | Low         | Medium      | High        |
++------------------+-------------+-------------+-------------+
+| Implementation   | Very Simple | Moderate    | Complex     |
+| Complexity       |             |             |             |
++------------------+-------------+-------------+-------------+
+| Tuning Required  | Minimal     | Moderate    | Extensive   |
++------------------+-------------+-------------+-------------+
 
 Recommendation: Sliding Window approach selected for:
 - Best balance of performance and efficiency
