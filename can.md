@@ -756,8 +756,8 @@ The immediate effect of this blocking is dramatic. Legitimate traffic from the S
 The key to understanding why the IDS can protect against the attack despite the Attacker's high-priority frames involves recognizing what blocking actually accomplishes. The IDS cannot prevent the Attacker from transmitting frames on the bus—those high-priority frames will still win arbitration and consume bus bandwidth. However, by configuring its hardware filters to ignore the attack traffic, the IDS ensures that its own receive buffer is not filled with attack frames. This means the IDS's CAN controller remains available to receive legitimate traffic when it does appear on the bus.
 But how can legitimate traffic appear on the bus at all if the Attacker is continuously transmitting high-priority frames? The answer lies in subtle timing considerations and the fact that the Attacker cannot truly maintain one hundred percent bus utilization. There are mandatory gaps between frames required by the CAN protocol, and there are brief periods when the Attacker's transmit buffer is being refilled by software. During these tiny gaps, which might last only a few bit times, a legitimate node can begin transmission. If the legitimate node wins arbitration during its transmission (which happens when the Attacker is not transmitting), the legitimate frame can complete successfully.
 Additionally, the IDS itself can assist legitimate traffic through its active mitigation mechanisms. When operating in maximum protection mode, the IDS can transmit error frames that deliberately disrupt the Attacker's transmissions. By carefully timing these error frames, the IDS can create opportunities for legitimate traffic to gain bus access. However, this active disruption must be used judiciously to avoid creating a new denial-of-service condition, so our implementation only activates it when flooding is detected and rate-limits the error frame generation.
-IDS Protection Timeline
-
+### IDS Protection Timeline
+``
 Time (ms from attack start)
 0         5         10        15        20        100     60000
 |---------|---------|---------|---------|---------|-------|
@@ -767,8 +767,9 @@ Time (ms from attack start)
 |         |         | Flood   | Resumes | Protected|      |
 |         |         |         |         |         |       |
 +---------+---------+---------+---------+---------+-------+
-
-IDS State:
+```
+### IDS State:
+```
 Normal -> Analyzing -> ALERT -> Blocking -> Blocking -> ...
 
 Actions Taken:
@@ -791,8 +792,11 @@ Detection Metrics:
 - True Positives: 10/10 (100%)
 - Messages Lost: 6/120 (5%)
 - Messages Received: 114/120 (95%)
+
+```
 We conduct extensive experiments varying different parameters to fully characterize IDS performance. We vary the attack intensity by changing how aggressively the Attacker floods the bus, though we find that even maximum-intensity flooding is effectively mitigated. We vary the legitimate traffic rate from one hertz up to ten hertz to see how the IDS performs under different load conditions. We vary the detection threshold to explore the tradeoff between detection latency and false positive rate. Through these parameter sweeps, we identify optimal configuration values that balance quick detection against robustness.
 One particularly interesting experiment involves multiple simultaneous attackers. We modify our testbed to include a fourth node running attack firmware with a different high-priority identifier. When both attackers activate simultaneously, the IDS must detect and block both identifiers independently. The results show that the IDS successfully identifies and blocks both attack sources, with the detection latency for the second attacker being similar to the first. This demonstrates that the IDS's multi-identifier tracking and blocklist mechanism scales to handle multiple concurrent threats.
+
 ## 7.5 Performance Metrics and Statistical Analysis Methodology
 To rigorously evaluate the IDS performance, we must carefully define our metrics and analysis methodology. The primary metrics we track include detection latency, false positive rate, false negative rate, packet delivery ratio during attack, and computational overhead.
 Detection latency is defined as the time interval from when the first attack frame appears on the bus until the IDS adds the malicious identifier to the blocklist. This metric is critical because it determines how long the network remains vulnerable after an attack begins. We measure detection latency by timestamping the first attack frame (which we can identify in our controlled experiments because we know when we triggered the attack) and timestamping the IDS log message indicating blocklist addition. The difference between these timestamps is the detection latency. Across our experiments, we measure a mean detection latency of twelve milliseconds with a standard deviation of three milliseconds.
